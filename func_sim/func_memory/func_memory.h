@@ -24,6 +24,23 @@ class FuncMemory
     // You could not create the object
     // using this default constructor
     FuncMemory(){}
+    
+    uint64  text_start_addr;
+	uint8*** sets_array;
+	
+	size_t sets_array_size;
+	size_t pages_array_size;
+	size_t page_size;
+	
+	uint64 addr_size;
+    uint64 page_bits;
+    uint64 offset_bits;
+	
+	uint64 addr_bits;
+    uint64 page_num_size;
+    uint64 offset_size;
+	
+	
 
 public:
 
@@ -41,5 +58,8 @@ public:
     
     string dump( string indent = "") const;
 };
+
+
+
 
 #endif // #ifndef FUNC_MEMORY__FUNC_MEMORY_H
