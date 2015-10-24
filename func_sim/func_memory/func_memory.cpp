@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <unistd.h>
 #include <cstring>
-#include <fcntl.h>
 #include <cstdlib>
 #include <cerrno>
 #include <cassert>
@@ -77,7 +76,7 @@ FuncMemory::FuncMemory( const char* executable_file_name,
 	page_size        = 1 << offset_bits;
 	
 	//create array of pointers to arraies of page
-	sets_array = ( uint8***)calloc( sets_array_size, sizeof(uint8**)); 
+	sets_array = new uint8**[sets_array_size]();
 	
 	while ( section_itr != sections_array.end())
 	{
@@ -94,7 +93,7 @@ FuncMemory::FuncMemory( const char* executable_file_name,
 			
 			if ( sets_array[ set_idx] == NULL)
 				//create array of pointers to pages
-				sets_array[ set_idx] = ( uint8**)calloc( pages_array_size, sizeof( uint8*));
+				sets_array[ set_idx] = new uint8*[pages_array_size]();
 			
 			uint64 page_idx = getPageIdx( page_bits,
 										  offset_bits,
@@ -102,7 +101,7 @@ FuncMemory::FuncMemory( const char* executable_file_name,
 										  
 			if ( sets_array[ set_idx][ page_idx] == NULL)
 				//create array of bytes
-				sets_array[ set_idx][ page_idx] = ( uint8*)calloc( page_size, sizeof( uint8));
+				sets_array[ set_idx][ page_idx] = new uint8[page_size]();
 			
 			uint64 offset_idx = getOffsetIdx( offset_bits, section_itr->start_addr + i);
 			sets_array[ set_idx][ page_idx][ offset_idx] = ( section_itr->content)[ i];
@@ -114,7 +113,18 @@ FuncMemory::FuncMemory( const char* executable_file_name,
 
 FuncMemory::~FuncMemory()
 {
-    delete [] this->sets_array;
+    for ( int i = 0; i < sets_array_size; i++)
+	{
+		if ( sets_array[ i] != NULL)
+		{
+			for ( int j = 0; j < pages_array_size; j++)
+				if ( sets_array[ i][ j] != NULL)
+					delete [] this->sets_array[ i][ j];
+		
+			delete [] this->sets_array[i];
+		}
+	}
+	delete [] this->sets_array;
 }
 
 uint64 FuncMemory::startPC() const
@@ -236,10 +246,10 @@ void FuncMemory::write( uint64 value, uint64 addr, unsigned short num_of_bytes)
 	
 	if ( sets_array[ set_idx] == NULL)
 	{
-		sets_array[ set_idx] = ( uint8**)calloc( pages_array_size, sizeof( uint8*));
-		sets_array[ set_idx][ page_idx] = ( uint8*)calloc( page_size, sizeof( uint8));
+		sets_array[ set_idx] = new uint8*[ pages_array_size]();
+		sets_array[ set_idx][ page_idx] = new uint8[page_size]();
 	} else if ( sets_array[ set_idx][ page_idx] == NULL)
-		sets_array[ set_idx][ page_idx] = ( uint8*)calloc( page_size, sizeof( uint8));		
+		sets_array[ set_idx][ page_idx] = new uint8[page_size]();
 	
 	//State machine: 
 	//State RDWR    - writing bytes
@@ -274,7 +284,7 @@ void FuncMemory::write( uint64 value, uint64 addr, unsigned short num_of_bytes)
 					set_idx++;
 				}
 				else if ( sets_array[ set_idx][ page_idx] == NULL)
-					sets_array[ set_idx][ page_idx] = ( uint8*)calloc( page_size, sizeof( uint8));
+					sets_array[ set_idx][ page_idx] = new uint8[page_size];
 			break;
 			
 			case CNG_SET:
@@ -284,7 +294,7 @@ void FuncMemory::write( uint64 value, uint64 addr, unsigned short num_of_bytes)
 				if ( set_idx >= sets_array_size)
 					state = EXIT;
 				else if ( sets_array[ set_idx] == NULL)
-					sets_array[ set_idx] = ( uint8**)calloc( pages_array_size, sizeof( uint8*));
+					sets_array[ set_idx] = new uint8*[pages_array_size];
 			break;
 			
 			case EXIT:
@@ -339,9 +349,9 @@ string FuncMemory::dump( string indent) const
 						for ( int i = 0; i < 4; i++)
 						{
 							if ( buf[ i] < 16)
-								oss << "0" << hex << (uint16)buf[ i];
+								oss << "0" << hex << ( uint16)buf[ i];
 							else
-								oss << hex << (uint16)buf[ i];
+								oss << hex << ( uint16)buf[ i];
 						}
 						oss << endl;
 						null_was_met = false;
