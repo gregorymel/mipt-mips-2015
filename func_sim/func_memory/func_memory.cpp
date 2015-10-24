@@ -284,7 +284,7 @@ void FuncMemory::write( uint64 value, uint64 addr, unsigned short num_of_bytes)
                 set_idx++;
             }
             else if ( sets_array[ set_idx][ page_idx] == NULL)
-                sets_array[ set_idx][ page_idx] = new uint8[page_size];
+                sets_array[ set_idx][ page_idx] = new uint8[page_size]();
             break;
 
         case CNG_SET:
@@ -294,7 +294,7 @@ void FuncMemory::write( uint64 value, uint64 addr, unsigned short num_of_bytes)
             if ( set_idx >= sets_array_size)
                 state = EXIT;
             else if ( sets_array[ set_idx] == NULL)
-                sets_array[ set_idx] = new uint8*[pages_array_size];
+                sets_array[ set_idx] = new uint8*[pages_array_size]();
             break;
 
         case EXIT:
