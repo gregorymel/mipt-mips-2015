@@ -142,7 +142,7 @@ uint64 FuncMemory::read( uint64 addr, unsigned short num_of_bytes) const
 	
 	uint64 set_idx = getSetIdx( addr_bits - page_num_size - offset_size, // set_bits
 								addr,					                 // addr
-								addr_bits);						         // addr_size
+								addr_bits);								 // addr_size
 	
 	uint64 page_idx = getPageIdx( page_num_size,
 								  offset_size,
