@@ -37,7 +37,7 @@ int main( int argc, char* argv[])
 	uint64 start_addr = 0, section_size = 0;
 	for ( vector<ElfSection>::iterator it = sections_array.begin(); it != sections_array.end(); ++it)
     {
-        if ( !strcmp( ".text", it->name))
+        if ( !strcmp( section_name, it->name))
 		{
 			start_addr = it->start_addr;
 			section_size = it->size;
