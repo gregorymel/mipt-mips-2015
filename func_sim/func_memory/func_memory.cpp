@@ -1,423 +1,166 @@
-/**
- * func_memory.cpp - the module implementing the concept of
+/*
+memory.cpp - the module implementing the concept of
  * programer-visible memory space accesing via memory address.
  * @author Alexander Titov <alexander.igorevich.titov@gmail.com>
  * Copyright 2012 uArchSim iLab project
  */
 
 // Generic C
-#include <cstdio>
-#include <unistd.h>
-#include <cstring>
-#include <cstdlib>
-#include <cerrno>
-#include <cassert>
+#include <string.h>
+
 // Generic C++
-#include <iostream>
-#include <string>
-#include <vector>
 #include <sstream>
+#include <iomanip>
 
 // uArchSim modules
 #include <func_memory.h>
 
-
-enum States
+union uint64_8
 {
-    RDWR,    // read or write byte
-    CNG_PG,  // change page
-    CNG_SET, // change set
-    EXIT     // exit failure
+    uint8 bytes[sizeof(uint64) / sizeof(uint8)];
+    uint64 val;
 };
 
-/*************************************************************************************************/
-uint64 getSetIdx( uint64 set_bits, uint64 addr, uint64 addr_size)
-{
-    uint64 set_idx = addr >> ( addr_size - set_bits);
-
-    return set_idx;
-}
-
-uint64 getPageIdx( uint64 page_bits, uint64 offset_bits, uint64 addr)
-{
-    uint64 mask = ( 1 << page_bits) - 1;
-    uint64 page_idx;
-
-    page_idx = ( addr >> offset_bits) & mask;
-
-    return page_idx;
-}
-
-uint64 getOffsetIdx( uint64 offset_bits, uint64 addr)
-{
-    uint64 mask = ( 1 << offset_bits) - 1;
-
-    return mask & addr;
-}
-/****************************************************************************************************/
-
 FuncMemory::FuncMemory( const char* executable_file_name,
-                        uint64 addr_size,
+                        uint64 addr_bits,
                         uint64 page_bits,
-                        uint64 offset_bits)
+                        uint64 offset_bits) :
+    addr_bits( addr_bits),
+    page_bits( page_bits),
+    offset_bits( offset_bits),
+    set_bits( addr_bits - offset_bits - page_bits),
+    offset_mask( ( 1 << offset_bits) - 1),
+    page_mask ( ( ( 1 << page_bits) - 1) << offset_bits),
+    set_mask ( (( 1 << set_bits) - 1) << ( page_bits + offset_bits))
 {
-    addr_bits = addr_size;
-    page_num_size = page_bits;
-    offset_size = offset_bits;
-    sets_array = NULL;
+    assert( executable_file_name);
 
-    vector<ElfSection> sections_array;
-
+    memory = new uint8** [1 << set_bits];
+    memset(memory, 0, sizeof(uint8**) * (1 << set_bits));
+    
+    std::vector<ElfSection> sections_array;
     ElfSection::getAllElfSections( executable_file_name, sections_array);
-    vector<ElfSection>::iterator section_itr = sections_array.begin();
 
-    sets_array_size  = 1 << ( addr_size - page_bits - offset_bits);
-    pages_array_size = 1 << page_bits;
-    page_size        = 1 << offset_bits;
-
-    //create array of pointers to arraies of page
-    sets_array = new uint8**[sets_array_size]();
-
-    while ( section_itr != sections_array.end())
+    for ( vector<ElfSection>::iterator it = sections_array.begin(); it != sections_array.end(); ++it)
     {
-        uint64 start_addr = section_itr->start_addr;
-
-        if ( strcmp( section_itr->name, ".text") == 0)
-            text_start_addr = start_addr;
-
-        for ( int i = 0; i < section_itr->size; i++)
+        if ( !strcmp( ".text", it->name))
         {
-            uint64 set_idx = getSetIdx( addr_size - page_bits - offset_bits, // set_bits
-                                        section_itr->start_addr + i,         // addr
-                                        addr_size);                          // addr_size
-
-            if ( sets_array[ set_idx] == NULL)
-                //create array of pointers to pages
-                sets_array[ set_idx] = new uint8*[pages_array_size]();
-
-            uint64 page_idx = getPageIdx( page_bits,
-                                          offset_bits,
-                                          section_itr->start_addr + i);        // addr
-
-            if ( sets_array[ set_idx][ page_idx] == NULL)
-                //create array of bytes
-                sets_array[ set_idx][ page_idx] = new uint8[page_size]();
-
-            uint64 offset_idx = getOffsetIdx( offset_bits, section_itr->start_addr + i);
-            sets_array[ set_idx][ page_idx][ offset_idx] = ( section_itr->content)[ i];
-
+            startPC_addr = it->start_addr;
         }
-        section_itr++;
+        for ( size_t offset = 0; offset < it->size; ++offset)
+        {
+            write( it->content[offset], it->start_addr + offset, 1);
+        }
     }
 }
 
 FuncMemory::~FuncMemory()
 {
-    for ( int i = 0; i < sets_array_size; i++)
-    {
-        if ( sets_array[ i] != NULL)
-        {
-            for ( int j = 0; j < pages_array_size; j++)
-                if ( sets_array[ i][ j] != NULL)
-                    delete [] this->sets_array[ i][ j];
+    uint64 set_cnt = 1 << set_bits;
+    uint64 page_cnt = 1 << page_bits;
 
-            delete [] this->sets_array[i];
+    for ( size_t set = 0; set < set_cnt; ++set)
+    {
+        if (memory[set] != NULL)
+        {
+            for ( size_t page = 0; page < page_cnt; ++page)
+            {
+                if (memory[set][page] != NULL)
+                {
+                    delete [] memory[set][page];
+                }
+            }
+            delete [] memory[set];
         }
     }
-    delete [] this->sets_array;
-}
-
-uint64 FuncMemory::startPC() const
-{
-    return this->text_start_addr;
+    delete [] memory;
 }
 
 uint64 FuncMemory::read( uint64 addr, unsigned short num_of_bytes) const
 {
-    if ( num_of_bytes <= 0)
-        assert( 0);
+    assert( num_of_bytes <= 8);
+    assert( num_of_bytes != 0);
+    assert( check( addr));
+    assert( check( addr + num_of_bytes - 1));
 
-    unsigned short bytes_read = 0;
-    uint64 number = 0;
+    uint64_8 value;
+    value.val = 0ull;
 
-    uint64 set_idx = getSetIdx( addr_bits - page_num_size - offset_size, // set_bits
-                                addr,                                    // addr
-                                addr_bits);                              // addr_size
-
-    uint64 page_idx = getPageIdx( page_num_size,
-                                  offset_size,
-                                  addr);                                  // addr
-
-    uint64 offset_idx = getOffsetIdx( offset_size, addr);
-
-    if ( sets_array == NULL)
-        assert( 0);
-
-    if ( sets_array[ set_idx] == NULL)
+    for ( size_t i = 0; i < num_of_bytes; ++i)
     {
-        cerr << "Sigmentation fault";
-        assert( 0);
-    } else if ( sets_array[ set_idx][ page_idx] == NULL)
-    {
-        cerr << "Sigmentation fault";
-        assert( 0);
+        value.bytes[i] = read_byte( addr + i);
     }
 
-    States state = RDWR;
-
-    //State machine:
-    //State RDWR    - reading bytes
-    //State CNG_PG  - changing page
-    //State CNG_SET - changing set
-    //State EXIT    - exit in case of an error
-    while ( bytes_read < num_of_bytes)
-    {
-        switch( state)
-        {
-        case RDWR:
-            number += ( sets_array[ set_idx][ page_idx][ offset_idx] << ( bytes_read * 8));
-            bytes_read++;
-            offset_idx++;
-
-            if ( offset_idx >= page_size)
-            {
-                state = CNG_PG;
-                page_idx++;
-            }
-            break;
-
-        case CNG_PG:
-            offset_idx = 0;
-            state = RDWR;
-
-            if ( page_idx >= pages_array_size)
-            {
-                state = CNG_SET;
-                set_idx++;
-            }
-            else if ( sets_array[ set_idx][ page_idx] == NULL)
-                state = EXIT;
-            break;
-
-        case CNG_SET:
-            page_idx = 0;
-            state = CNG_PG;
-
-
-            if ( set_idx >= sets_array_size)
-                state = EXIT;
-            else if ( sets_array[ set_idx] == NULL)
-                state = EXIT;
-            break;
-
-        case EXIT:
-            cerr << "Sigmentation fault1" << endl << endl;
-            assert( 0);
-            break;
-        }
-    }
-
-    return number;
+    return value.val;
 }
 
 void FuncMemory::write( uint64 value, uint64 addr, unsigned short num_of_bytes)
 {
-    if ( num_of_bytes <= 0)
-        assert( 0);
+    assert( addr != 0);
+    assert( num_of_bytes != 0 );
+    alloc( addr);
+    alloc( addr + num_of_bytes - 1);
 
-    union
+    uint64_8 value_;
+    value_.val = value;
+
+    for ( size_t i = 0; i < num_of_bytes; ++i)
     {
-        uint64 number;
-        uint8 bytes[8];
-    };
-
-    unsigned short bytes_write = 0;
-    number = value;
-
-    uint64 set_idx = getSetIdx( addr_bits - page_num_size - offset_size, // set_bits
-                                addr,                                    // addr
-                                addr_bits);                              // addr_size
-
-    uint64 page_idx = getPageIdx( page_num_size,
-                                  offset_size,
-                                  addr);                                  // addr
-
-    uint64 offset_idx = getOffsetIdx( offset_size, addr);
-
-    if ( sets_array[ set_idx] == NULL)
-    {
-        sets_array[ set_idx] = new uint8*[ pages_array_size]();
-        sets_array[ set_idx][ page_idx] = new uint8[page_size]();
-    } else if ( sets_array[ set_idx][ page_idx] == NULL)
-        sets_array[ set_idx][ page_idx] = new uint8[page_size]();
-
-    //State machine:
-    //State RDWR    - writing bytes
-    //State CNG_PG  - changing page
-    //State CNG_SET - changing set
-    //State EXIT    - exit in case of an error
-    States state = RDWR;
-
-    while ( bytes_write < num_of_bytes)
-    {
-        switch( state)
-        {
-        case RDWR:
-            sets_array[ set_idx][ page_idx][ offset_idx] = bytes[ bytes_write];
-            bytes_write++;
-
-            offset_idx++;
-            if ( offset_idx >= page_size)
-            {
-                state = CNG_PG;
-                page_idx++;
-            }
-            break;
-
-        case CNG_PG:
-            offset_idx = 0;
-            state = RDWR;
-
-            if ( page_idx >= pages_array_size)
-            {
-                state = CNG_SET;
-                set_idx++;
-            }
-            else if ( sets_array[ set_idx][ page_idx] == NULL)
-                sets_array[ set_idx][ page_idx] = new uint8[page_size]();
-            break;
-
-        case CNG_SET:
-            page_idx = 0;
-            state = CNG_PG;
-
-            if ( set_idx >= sets_array_size)
-                state = EXIT;
-            else if ( sets_array[ set_idx] == NULL)
-                sets_array[ set_idx] = new uint8*[pages_array_size]();
-            break;
-
-        case EXIT:
-            cerr << "Sigmentation fault" << endl;
-            assert( 0);
-            break;
-        }
+        write_byte( addr + i, value_.bytes[i]);
     }
+}
+
+void FuncMemory::alloc( uint64 addr)
+{
+    uint8*** set = &memory[get_set(addr)];
+    if ( *set == NULL)
+    {
+        *set = new uint8* [1 << page_bits];
+    	memset(*set, 0, sizeof(uint8*) * (1 << page_bits));
+    }
+    uint8** page = &memory[get_set(addr)][get_page(addr)];
+    if ( *page == NULL)
+    {
+        *page = new uint8 [1 << offset_bits];
+    	memset(*page, 0, sizeof(uint8) * (1 << offset_bits));
+    }
+}
+
+bool FuncMemory::check( uint64 addr) const
+{
+    uint8** set = memory[get_set(addr)];
+    return set != NULL && set[get_page(addr)] != NULL;
 }
 
 string FuncMemory::dump( string indent) const
 {
-    ostringstream oss;
-
-    oss << indent << "Dump memory:" << endl
-        << indent << " Content:" << endl;
-
-    uint64 bytes_count = 0;
-
-    uint64 set_idx = 0;
-    uint64 page_idx = 0;
-    uint64 offset_idx = 0;
-    uint64 addr = 0;
-
-    uint8 buf[4];
-    bool null_was_met = true;
-    unsigned short number_of_zero = 0;  // how many zeros were read
-
-    //State machine:
-    //State RDWR    - reading bytes
-    //State CNG_PG  - changing page
-    //State CNG_SET - changing set
-    //State EXIT    - exit in case of an error
-    States state = CNG_SET;
-
-    while ( set_idx < this->sets_array_size)
+    std::ostringstream oss;
+    oss << std::setfill( '0') << hex;
+    
+    uint64 set_cnt = 1 << set_bits;
+    uint64 page_cnt = 1 << page_bits;
+    uint64 offset_cnt = 1 << offset_bits;
+    
+    for ( size_t set = 0; set < set_cnt; ++set)
     {
-        switch( state)
+        if (memory[set] != NULL)
         {
-        case RDWR:
-            if ( sets_array[ set_idx][ page_idx][ offset_idx] == 0)
-                number_of_zero++;
-            buf[ bytes_count] = sets_array[ set_idx][ page_idx][ offset_idx];
-            bytes_count++;
-
-            if ( bytes_count == 4)
+            for ( size_t page = 0; page < page_cnt; ++page)
             {
-                if ( number_of_zero != 4)
+                if (memory[set][page] != NULL)
                 {
-                    oss << indent << "    0x" << hex << addr
-                        << ":    " ;
-                    for ( int i = 0; i < 4; i++)
+                    for ( size_t offset = 0; offset < offset_cnt; ++offset)
                     {
-                        if ( buf[ i] < 16)
-                            oss << "0" << hex << ( uint16)buf[ i];
-                        else
-                            oss << hex << ( uint16)buf[ i];
+                        if (memory[set][page][offset])
+                        {
+                            oss << "addr 0x" << get_addr( set, page, offset) 
+                                << ": data 0x" << memory[set][page][offset] << std::endl;
+                        }
                     }
-                    oss << endl;
-                    null_was_met = false;
-                } else if ( !null_was_met)
-                {
-                    oss << indent << " ..." << endl;
-                    null_was_met = true;
-                }
-
-                addr += 4;
-                number_of_zero = 0;
-                bytes_count = 0;
-            }
-
-            offset_idx++;
-
-            if ( offset_idx >= page_size)
-            {
-                state = CNG_PG;
-                page_idx++;
-            }
-            break;
-
-        case CNG_PG:
-            offset_idx = 0;
-            state = RDWR;
-
-            if ( page_idx >= pages_array_size)
-            {
-                state = CNG_SET;
-                set_idx++;
-            }
-            else if ( sets_array[ set_idx][ page_idx] == NULL)
-            {
-                state = CNG_PG;
-                addr += page_size;
-                page_idx++;
-                if ( !null_was_met)
-                {
-                    oss << indent << " ..." << endl;
-                    null_was_met = true;
                 }
             }
-
-            break;
-
-        case CNG_SET:
-            page_idx = 0;
-            state = CNG_PG;
-
-            if ( sets_array[ set_idx] == NULL)
-            {
-                state = CNG_SET;
-                addr += pages_array_size * page_size;
-                set_idx++;
-                if ( !null_was_met)
-                {
-                    oss << indent << " ..." << endl;
-                    null_was_met = true;
-                }
-            }
-            break;
         }
     }
 
     return oss.str();
-
 }
-
