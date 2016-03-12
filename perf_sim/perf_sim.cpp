@@ -109,7 +109,7 @@ void PerfMIPS::clock_fetch( int cycle)
 	bool is_stall = false;
 	
 	rp_dec_2_fetch_stall->read( &is_stall, cycle);
-	if ( is_stall && !PC_is_valid)
+	if ( is_stall || !PC_is_valid)
 	{
 		Dump( fetch_dump);
 		return;
